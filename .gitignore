@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 saves/*.json
+build/
+dist/
+*.spec
 saves/*.tmp
 old/
 .claude/settings.local.json

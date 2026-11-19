@@ -25,6 +25,11 @@ class TurnReport:
     status: GameStatus = GameStatus.PLAYING
     lines: list[str] = field(default_factory=list)
 
+    @property
+    def important(self) -> bool:
+        """Важное событие: в режиме реального времени ставит игру на паузу."""
+        return self.event is not None or self.penalty > 0 or self.status is not GameStatus.PLAYING
+
 
 def _floor_step(qty: float, step: float) -> float:
     return round(math.floor(qty / step + 1e-9) * step, 6)
@@ -63,6 +68,11 @@ class Game:
 
     def qty(self, symbol: str) -> float:
         return self.state.holdings.get(symbol, 0.0)
+
+    def avg_cost(self, symbol: str) -> float:
+        """Средняя цена покупки текущей позиции (0, если актива нет)."""
+        q = self.qty(symbol)
+        return round(self.state.cost_basis.get(symbol, 0.0) / q, 4) if q > 0 else 0.0
 
     def portfolio_value(self) -> float:
         return round(sum(self.qty(a.symbol) * self.price(a.symbol) for a in config.ASSETS), 2)
@@ -119,6 +129,7 @@ class Game:
             raise TradeError(f"Не хватает денег: нужно {_money(cost)} $")
         self.state.cash = round(self.state.cash - cost, 2)
         self.state.holdings[symbol] = round(self.qty(symbol) + q, 6)
+        self.state.cost_basis[symbol] = round(self.state.cost_basis.get(symbol, 0.0) + cost, 2)
         return cost
 
     def sell(self, symbol: str, qty: float) -> float:
@@ -129,7 +140,10 @@ class Game:
             raise TradeError("Недостаточно актива на руках")
         proceeds = round(q * self.bid(symbol), 2)
         self.state.cash = round(self.state.cash + proceeds, 2)
-        self.state.holdings[symbol] = round(self.qty(symbol) - q, 6)
+        before = self.qty(symbol)
+        self.state.holdings[symbol] = round(before - q, 6)
+        basis = self.state.cost_basis.get(symbol, 0.0)
+        self.state.cost_basis[symbol] = 0.0 if self.qty(symbol) <= 0 else round(basis * (1 - q / before), 2)
         return proceeds
 
     # ------------------------------- банк -------------------------------

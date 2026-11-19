@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -9,9 +11,25 @@ from pathlib import Path
 from .engine import Game
 from .models import BankAccount, GameState, GameStatus, ModKind, Modifier
 
-SAVES_DIR = Path(__file__).resolve().parent.parent / "saves"
+def _saves_dir() -> Path:
+    """Рядом с проектом; в собранном .exe — рядом с игрой, а если там нельзя писать — в %LOCALAPPDATA%."""
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parent.parent / "saves"
+    local = Path(sys.executable).resolve().parent / "saves"
+    try:
+        local.mkdir(parents=True, exist_ok=True)
+        probe = local / ".w"
+        probe.write_text("x")
+        probe.unlink()
+        return local
+    except OSError:
+        return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Commersant" / "saves"
+
+
+SAVES_DIR = _saves_dir()
 SAVE_FILE = SAVES_DIR / "savegame.json"
 SCORES_FILE = SAVES_DIR / "highscores.json"
+SETTINGS_FILE = SAVES_DIR / "settings.json"
 SAVE_VERSION = 1
 MAX_SCORES = 10
 
@@ -65,3 +83,22 @@ def add_score(game: Game, name: str = "Игрок", path: Path = SCORES_FILE) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(scores, ensure_ascii=False, indent=1), encoding="utf-8")
     return scores
+
+
+DEFAULT_SETTINGS = {"realtime": False, "speed": 3.0, "period": 30}
+
+
+def load_settings(path: Path = SETTINGS_FILE) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        data = {}
+    return {**DEFAULT_SETTINGS, **{k: v for k, v in data.items() if k in DEFAULT_SETTINGS}}
+
+
+def save_settings(settings: dict, path: Path = SETTINGS_FILE) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass  # настройки не критичны

@@ -88,3 +88,30 @@ class GameOverDialog(QDialog):
         lay.addWidget(head)
         lay.addWidget(body)
         lay.addWidget(buttons)
+
+
+class EventDialog(QDialog):
+    """Уведомление о важном событии в режиме реального времени: время стоит, пока игрок не подтвердит."""
+
+    def __init__(self, day: int, lines: list[str], tone: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Важное событие — игра на паузе")
+        self.setMinimumWidth(520)
+        color = {1: "#3DFF7A", -1: "#FF4D5E", 0: "#FFB000"}[tone]
+        head = QLabel(f"СОБЫТИЕ · ход {day}")
+        head.setObjectName("big")
+        body = QLabel("<br><br>".join(lines))
+        body.setWordWrap(True)
+        body.setStyleSheet(f"font-size: 12pt; color: {color};")
+        note = QLabel("Время остановлено. Игра продолжится после подтверждения.")
+        note.setObjectName("dim")
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok.setText("Понятно (Enter)")
+        ok.setObjectName("primary")
+        buttons.accepted.connect(self.accept)
+        lay = QVBoxLayout(self)
+        lay.addWidget(head)
+        lay.addWidget(body)
+        lay.addWidget(note)
+        lay.addWidget(buttons)

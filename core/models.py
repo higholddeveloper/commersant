@@ -67,6 +67,7 @@ class GameState:
     prices: dict[str, float] = field(default_factory=dict)
     history: dict[str, list[float]] = field(default_factory=dict)
     holdings: dict[str, float] = field(default_factory=dict)
+    cost_basis: dict[str, float] = field(default_factory=dict)  # суммарные затраты на текущую позицию
     bank: BankAccount = field(default_factory=BankAccount)
     modifiers: list[Modifier] = field(default_factory=list)
     log: list[str] = field(default_factory=list)

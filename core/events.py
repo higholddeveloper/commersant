@@ -181,6 +181,8 @@ def apply_event(state: GameState, ev: EventDef, rng: random.Random) -> EventResu
                     continue
                 new = _floor_step(have * (1.0 + value), a.step)
                 state.holdings[a.symbol] = new
+                if new <= 0:
+                    state.cost_basis[a.symbol] = 0.0
                 changes.append(f"{a.symbol} {new - have:+g}".replace("-", "−"))
             details.append(", ".join(changes) if changes else "у вас этого нет — обошлось")
         elif eff.kind in (EffectKind.DRIFT, EffectKind.RENT, EffectKind.RATE):

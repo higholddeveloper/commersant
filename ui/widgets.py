@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import QLineEdit, QPlainTextEdit, QWidget
+from PySide6.QtWidgets import QLineEdit, QPlainTextEdit, QSizePolicy, QWidget
 
 from . import theme
 
@@ -35,15 +35,18 @@ def pct_color(x: float) -> str:
 
 
 class Sparkline(QWidget):
-    """Мини-график цены: линия, заливка, подписи мин/макс. Зелёный — рост за период, красный — падение."""
+    """График цены за период: линия, заливка, мин/макс, изменение за период и линия средней цены покупки."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._values: list[float] = []
-        self.setMinimumHeight(70)
+        self._ref: float | None = None
+        self.setMinimumHeight(60)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def set_values(self, values: list[float]) -> None:
+    def set_data(self, values: list[float], ref: float | None = None) -> None:
         self._values = list(values)
+        self._ref = ref if ref and ref > 0 else None
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802
@@ -59,32 +62,44 @@ class Sparkline(QWidget):
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, "нет данных")
             return
         lo, hi = min(vals), max(vals)
+        if self._ref:
+            lo, hi = min(lo, self._ref), max(hi, self._ref)
         span = (hi - lo) or max(abs(hi) * 0.01, 1e-9)
-        pad_l, pad_r, pad_t, pad_b = 6.0, 6.0, 14.0, 6.0
+        pad_l, pad_r, pad_t, pad_b = 6.0, 6.0, 16.0, 6.0
         w, h = r.width() - pad_l - pad_r, r.height() - pad_t - pad_b
-        pts = [QPointF(r.left() + pad_l + w * i / (len(vals) - 1),
-                       r.top() + pad_t + h * (1 - (v - lo) / span)) for i, v in enumerate(vals)]
+
+        def y_of(v: float) -> float:
+            return r.top() + pad_t + h * (1 - (v - lo) / span)
+
+        pts = [QPointF(r.left() + pad_l + w * i / (len(vals) - 1), y_of(v)) for i, v in enumerate(vals)]
         color = QColor(theme.UP if vals[-1] >= vals[0] else theme.DOWN)
-        # сетка
         p.setPen(QPen(QColor(theme.PANEL_HI), 1, Qt.PenStyle.DotLine))
         for k in range(1, 4):
             y = r.top() + pad_t + h * k / 4
             p.drawLine(QPointF(r.left() + 1, y), QPointF(r.right() - 1, y))
-        # заливка
         fill = QColor(color)
         fill.setAlpha(40)
         poly = QPolygonF(pts + [QPointF(pts[-1].x(), r.bottom() - pad_b), QPointF(pts[0].x(), r.bottom() - pad_b)])
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(fill)
         p.drawPolygon(poly)
-        # линия
+        if self._ref:  # средняя цена покупки
+            y = y_of(self._ref)
+            p.setPen(QPen(QColor(theme.CYAN), 1, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(r.left() + 1, y), QPointF(r.right() - 1, y))
         p.setPen(QPen(color, 2))
         p.drawPolyline(QPolygonF(pts))
         p.setBrush(color)
         p.drawEllipse(pts[-1], 3, 3)
-        # подписи
         p.setPen(QColor(theme.DIM))
-        p.drawText(QPointF(r.left() + 6, r.top() + 11), f"макс {fmt_price(hi)}   мин {fmt_price(lo)}")
+        p.drawText(QPointF(r.left() + 6, r.top() + 12), f"макс {fmt_price(max(vals))}  мин {fmt_price(min(vals))}")
+        chg = vals[-1] / vals[0] - 1 if vals[0] else 0.0
+        p.setPen(QColor(pct_color(chg)))
+        label = f"{len(vals) - 1} х.  {fmt_pct(chg)}"
+        p.drawText(QPointF(r.right() - 6 - p.fontMetrics().horizontalAdvance(label), r.top() + 12), label)
+        if self._ref:
+            p.setPen(QColor(theme.CYAN))
+            p.drawText(QPointF(r.left() + 6, r.bottom() - 4), "-- ср. цена покупки")
 
 
 class QtyEdit(QLineEdit):

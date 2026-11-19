@@ -11,6 +11,7 @@ UP = "#3DFF7A"
 DOWN = "#FF4D5E"
 AMBER = "#FFB000"
 CYAN = "#4DD0FF"
+SELECT_BG = "#4A3A00"   # подсветка выбранной строки
 
 FONT_FAMILY = "Consolas"
 FONT_SIZE = 10
@@ -39,6 +40,8 @@ QPushButton:pressed {{ background: {BORDER}; }}
 QPushButton:disabled {{ color: {DIM}; border-color: {PANEL_HI}; }}
 QPushButton#buy {{ color: {UP}; border-color: {UP}; }}
 QPushButton#sell {{ color: {DOWN}; border-color: {DOWN}; }}
+QPushButton#period {{ padding: 3px 8px; }}
+QPushButton#period:checked {{ background: {AMBER}; color: {BG}; border-color: {AMBER}; font-weight: bold; }}
 QPushButton#primary {{ color: {AMBER}; border: 2px solid {AMBER}; font-weight: bold; }}
 QPushButton#primary:hover {{ background: {AMBER}; color: {BG}; }}
 QPushButton#buy:hover {{ background: {UP}; color: {BG}; }}

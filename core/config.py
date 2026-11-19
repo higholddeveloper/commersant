@@ -68,7 +68,7 @@ DIFFICULTIES: dict[str, Difficulty] = {
 }
 DEFAULT_DIFFICULTY = "normal"
 
-HISTORY_LEN = 60       # точек истории котировок
+HISTORY_LEN = 160      # точек истории котировок (хватает на всю партию)
 LOG_LEN = 50           # записей в логе
 PRICE_FLOOR_RATIO = 0.05   # цена не падает ниже 5% от базовой
 MAX_TURN_RETURN = (-0.40, 0.60)  # ограничение доходности за ход

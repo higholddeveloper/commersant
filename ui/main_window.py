@@ -1,18 +1,18 @@
 """Главное окно: шапка, вкладки 1–5, торговля, лента новостей, горячие клавиши."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
                                QLabel, QMainWindow, QMessageBox, QProgressBar, QPushButton, QTableWidget,
                                QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
-from core import config, market, storage
+from core import analysis, config, market, storage
 from core.engine import Game, TradeError
 from core.models import AssetClass, GameStatus, ModKind
 
 from . import theme
-from .dialogs import GameOverDialog, HighscoresDialog, NewGameDialog
+from .dialogs import EventDialog, GameOverDialog, HighscoresDialog, NewGameDialog
 from .widgets import NewsLog, QtyEdit, Sparkline, fmt_money, fmt_pct, fmt_price, fmt_qty, pct_color
 
 WIN_W, WIN_H = 860, 580
@@ -26,7 +26,11 @@ TAB_TITLES = {
 BANK_TAB = 4
 
 # Латинская клавиша + её позиция на русской раскладке (ЙЦУКЕН) — шорткаты работают в обеих раскладках.
-RU = {"B": "И", "S": "Ы", "N": "Т", "Q": "Й", "Z": "Я", "X": "Ч", "C": "С", "D": "В", "W": "Ц", "L": "Д", "R": "К"}
+RU = {"B": "И", "S": "Ы", "N": "Т", "Q": "Й", "Z": "Я", "X": "Ч", "C": "С", "D": "В", "W": "Ц", "L": "Д", "R": "К",
+      "M": "Ь", "P": "З", "T": "Е"}
+
+SPEEDS = (1.0, 2.0, 3.0, 5.0, 8.0, 12.0)  # секунд на игровой ход в режиме реального времени
+TICK_MS = 100
 
 
 def _label(text: str = "", name: str = "") -> QLabel:
@@ -48,17 +52,20 @@ def _btn(text: str, name: str = "", slot=None, tip: str = "") -> QPushButton:
     return b
 
 
-def _qty_buttons(owner: "MainWindow", side: str) -> list[QPushButton]:
-    pre = "" if side == "buy" else "⇧"
-    names = (("25%", 0.25, "Z"), ("50%", 0.5, "X"), ("Макс", 1.0, "C"))
-    return [_btn(f"{t} [{pre}{k}]", "buy" if side == "buy" else "sell",
-                 lambda _=False, p=p: owner.trade_pct(side, p)) for t, p, k in names]
+PERIODS = (10, 30, 60, 0)  # ходов; 0 = вся история
+TREND_ICON = {"decline": "▼", "rebound": "↗", "growth": "▲", "peak": "▲▲", "flat": "═", "mixed": "~", "new": "…"}
+TREND_COLOR = {1: theme.UP, -1: theme.DOWN, 0: theme.CYAN}
+
+
+def period_text(p: int) -> str:
+    return "Все" if p == 0 else str(p)
 
 
 class MarketPage(QWidget):
-    """Вкладка рынка: таблица активов слева, детали + график + кнопки сделок справа."""
+    """Вкладка рынка: таблица активов слева, карточка выбранного актива справа."""
 
-    HEADERS = ["Тикер", "Название", "Цена", "Δ ход", "На руках", "Стоимость"]
+    HEADERS = ["Тикер", "Название", "Цена", "Δ ход", "На руках"]
+    COLS = (98, 76, 68, 58, 70)
 
     def __init__(self, win: "MainWindow", cls: AssetClass) -> None:
         super().__init__()
@@ -73,24 +80,39 @@ class MarketPage(QWidget):
         t.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         t.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         t.setShowGrid(False)
-        hh = t.horizontalHeader()
-        hh.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        for i, w in enumerate((82, 76, 68, 56, 70, 80)):
+        t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        for i, w in enumerate(self.COLS):
             t.setColumnWidth(i, w)
-        t.setFixedWidth(sum((82, 76, 68, 56, 70, 80)) + 8)
+        t.setFixedWidth(sum(self.COLS) + 8)
         t.setCurrentCell(0, 0)
-        t.currentCellChanged.connect(lambda *_: self.update_detail())
+        t.currentCellChanged.connect(lambda *_: self.refresh())
 
-        # --- правая панель ---
+        # --- карточка актива ---
         self.title = _label("", "big")
         self.price = _label()
+        self.trend = _label()
         self.held = _label()
         self.extra = _label("", "cyan")
-        for lbl in (self.price, self.held):
+        for lbl in (self.price, self.trend, self.held, self.extra):
             lbl.setTextFormat(Qt.TextFormat.RichText)
-        for lbl in (self.held, self.extra):
+        for lbl in (self.trend, self.held, self.extra):
             lbl.setWordWrap(True)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.trend.setFixedHeight(36)
+        self.held.setFixedHeight(36)
         self.spark = Sparkline()
+
+        self.period_btns: dict[int, QPushButton] = {}
+        head = QHBoxLayout()
+        head.setSpacing(3)
+        head.addWidget(self.title, 1)
+        head.addWidget(_label("период [T]:", "dim"))
+        for p in PERIODS:
+            b = _btn(period_text(p), "period", lambda _=False, p=p: win.set_period(p))
+            b.setCheckable(True)
+            self.period_btns[p] = b
+            head.addWidget(b)
+
         self.qty = QtyEdit("1")
         self.qty.setFixedWidth(70)
         self.qty.returnPressed.connect(lambda: win.trade("buy"))
@@ -101,21 +123,22 @@ class MarketPage(QWidget):
         row1.addWidget(_btn("[S] Продать", "sell", lambda: win.trade("sell")))
         row1.addStretch()
         row2 = QHBoxLayout()
-        row2.addWidget(_label("Купить:", "dim"))
-        for b in _qty_buttons(win, "buy"):
-            row2.addWidget(b)
-        row3 = QHBoxLayout()
-        row3.addWidget(_label("Продать:", "dim"))
-        for b in _qty_buttons(win, "sell"):
-            row3.addWidget(b)
+        row2.setSpacing(3)
+        for text, p, key in (("25%", 0.25, "Z"), ("50%", 0.5, "X"), ("Макс", 1.0, "C")):
+            row2.addWidget(_btn(f"{text} [{key}]", "buy", lambda _=False, p=p: win.trade_pct("buy", p)))
+        for text, p, key in (("25%", 0.25, "⇧Z"), ("50%", 0.5, "⇧X"), ("Всё", 1.0, "⇧C")):
+            row2.addWidget(_btn(f"{text} [{key}]", "sell", lambda _=False, p=p: win.trade_pct("sell", p)))
 
         right = QVBoxLayout()
         right.setSpacing(3)
-        for w in (self.title, self.price, self.spark, self.held, self.extra):
-            right.addWidget(w)
+        right.addLayout(head)
+        right.addWidget(self.price)
+        right.addWidget(self.trend)
+        right.addWidget(self.spark, 1)
+        right.addWidget(self.held)
+        right.addWidget(self.extra)
         right.addLayout(row1)
         right.addLayout(row2)
-        right.addLayout(row3)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -132,12 +155,14 @@ class MarketPage(QWidget):
 
     def refresh(self) -> None:
         g = self.win.game
+        cur = max(self.table.currentRow(), 0)
         self.table.blockSignals(True)
         for r, a in enumerate(self.assets):
             chg = market.change_pct(g.state, a.symbol)
             held = g.qty(a.symbol)
-            cells = [a.symbol, a.name, fmt_price(g.price(a.symbol)), fmt_pct(chg),
-                     fmt_qty(held) if held else "·", fmt_money(held * g.price(a.symbol)) if held else "·"]
+            marker = "▶ " if r == cur else "  "
+            cells = [marker + a.symbol, a.name, fmt_price(g.price(a.symbol)), fmt_pct(chg),
+                     fmt_qty(held) if held else "·"]
             for c, text in enumerate(cells):
                 it = QTableWidgetItem(text)
                 it.setTextAlignment((Qt.AlignmentFlag.AlignLeft if c < 2 else Qt.AlignmentFlag.AlignRight)
@@ -145,28 +170,48 @@ class MarketPage(QWidget):
                 if c == 3:
                     it.setForeground(QColor(pct_color(chg)))
                 elif c == 0:
-                    it.setForeground(QColor(theme.AMBER if held else theme.CYAN))
+                    it.setForeground(QColor(theme.AMBER if (held or r == cur) else theme.CYAN))
+                if r == cur:
+                    it.setBackground(QColor(theme.SELECT_BG))
+                    f = it.font()
+                    f.setBold(True)
+                    it.setFont(f)
                 self.table.setItem(r, c, it)
         self.table.blockSignals(False)
         self.update_detail()
 
     def update_detail(self) -> None:
-        g = self.win.game
+        g, win = self.win.game, self.win
         a = config.ASSET_BY_SYMBOL[self.selected()]
         chg = market.change_pct(g.state, a.symbol)
         held = g.qty(a.symbol)
-        self.title.setText(f"{a.symbol} · {a.name}")
+        for p, b in self.period_btns.items():
+            b.setChecked(p == win.period)
+        hist = g.state.history[a.symbol]
+        shown = hist if win.period == 0 else hist[-(win.period + 1):]
+        window = {10: 10, 30: 20, 60: 40}.get(win.period, 40)
+        tr = analysis.analyze(hist, a.volatility, window)
+        avg = g.avg_cost(a.symbol)
+
+        self.title.setText(f"▶ {a.symbol} · {a.name}")
         self.price.setText(f"<b>{fmt_price(g.price(a.symbol))} $</b> "
                            f"<span style='color:{pct_color(chg)}'>{fmt_pct(chg)}</span>"
                            f" <span style='color:{theme.DIM}'>· куп {fmt_price(g.ask(a.symbol))} / прод {fmt_price(g.bid(a.symbol))}</span>")
-        self.spark.set_values(g.state.history[a.symbol])
-        self.held.setText(f"На руках: <b>{fmt_qty(held)} {a.unit}</b> ≈ {fmt_money(held * g.price(a.symbol))}"
-                          f"  ·  можно купить: {fmt_qty(g.max_buy(a.symbol))}")
+        color = TREND_COLOR[tr.tone]
+        self.trend.setText(f"<b style='color:{color}'>{TREND_ICON[tr.key]} {tr.title}</b>"
+                           f" <span style='color:{theme.DIM}'>— {tr.hint}</span>")
+        self.spark.set_data(shown, avg if held else None)
+        text = (f"На руках: <b>{fmt_qty(held)} {a.unit}</b> ≈ {fmt_money(held * g.price(a.symbol))}"
+                f"  ·  можно купить: {fmt_qty(g.max_buy(a.symbol))}")
+        if held:
+            pnl = g.price(a.symbol) / avg - 1 if avg else 0.0
+            text += (f"<br>Ср. цена покупки <b>{fmt_price(avg)} $</b> · результат "
+                     f"<span style='color:{pct_color(pnl)}'>{fmt_pct(pnl)} "
+                     f"({fmt_money(held * (g.price(a.symbol) - avg), sign=True)})</span>")
+        self.held.setText(text)
         if a.cls is AssetClass.REALTY:
             self.extra.setText(f"Аренда {fmt_money(a.rent * g.rent_multiplier())}/ход (×{g.rent_multiplier():.2f}), "
                                f"всего {fmt_money(g.rent_income())}/ход")
-        else:
-            self.extra.setText("")
         self.extra.setVisible(a.cls is AssetClass.REALTY)
 
 
@@ -222,6 +267,13 @@ class MainWindow(QMainWindow):
     def __init__(self, game: Game | None = None) -> None:
         super().__init__()
         self.game = game or Game()
+        cfg = storage.load_settings()
+        self.realtime = bool(cfg["realtime"])
+        self.speed = min(SPEEDS, key=lambda x: abs(x - float(cfg["speed"])))
+        self.period = int(cfg["period"]) if int(cfg["period"]) in PERIODS else 30
+        self.paused = False
+        self._busy = 0          # >0 — открыто модальное окно, время стоит
+        self._elapsed = 0.0
         self.setWindowTitle("Коммерсант — Retro Edition")
         self.setFixedSize(WIN_W, WIN_H)
 
@@ -243,6 +295,17 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(page, TAB_TITLES[cls])
         self.bank_page = BankPage(self)
         self.tabs.addTab(self.bank_page, "[5] Банк")
+        self.mode_btn = _btn("", "", self.toggle_mode,
+                             "Пошаговый: время идёт только по [N]. Реальное время: ход каждые N секунд, "
+                             "на важных событиях игра встаёт на паузу.")
+        self.pause_btn = _btn("", "", self.toggle_pause, "Пауза / продолжить (P)")
+        corner = QWidget()
+        cl = QHBoxLayout(corner)
+        cl.setContentsMargins(0, 0, 0, 2)
+        cl.setSpacing(4)
+        cl.addWidget(self.mode_btn)
+        cl.addWidget(self.pause_btn)
+        self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
         self.tabs.currentChanged.connect(lambda _: self.refresh())
         v.addWidget(self.tabs, 1)
 
@@ -250,19 +313,28 @@ class MainWindow(QMainWindow):
         self.event_lbl.setWordWrap(True)
         v.addWidget(self.event_lbl)
         self.news = NewsLog()
-        self.news.setFixedHeight(92)
+        self.news.setFixedHeight(66)
         v.addWidget(self.news)
 
         status = QHBoxLayout()
+        self.countdown = QProgressBar()
+        self.countdown.setRange(0, 1000)
+        self.countdown.setTextVisible(False)
+        self.countdown.setFixedSize(110, 8)
+        status.addWidget(self.countdown)
         self.msg = _label("", "msg")
         self.factors = _label("", "dim")
-        self.factors.setAlignment(Qt.AlignmentFlag.AlignRight)
-        status.addWidget(self.msg, 1)
-        status.addWidget(self.factors, 1)
+        self.factors.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        status.addWidget(self.msg, 2)
+        status.addWidget(self.factors, 3)
         v.addLayout(status)
 
         v.addLayout(self._build_buttons())
         self._build_shortcuts()
+        self.timer = QTimer(self)
+        self.timer.setInterval(TICK_MS)
+        self.timer.timeout.connect(self._on_tick)
+        self.timer.start()
         self.refresh()
 
     # ----------------------------- построение -----------------------------
@@ -319,6 +391,11 @@ class MainWindow(QMainWindow):
             self._action(self._bi(key, True), lambda p=p: self.trade_pct("sell", p))
         for key, kind in (("D", "deposit"), ("W", "withdraw"), ("L", "loan"), ("R", "repay")):
             self._action(self._bi(key), lambda kind=kind: self._on_bank() and self.bank_do(kind))
+        self._action(self._bi("M"), self.toggle_mode)
+        self._action(self._bi("P"), self.toggle_pause)
+        self._action(self._bi("T"), self.cycle_period)
+        self._action(["+", "="], lambda: self.change_speed(-1))   # плюс — быстрее (меньше секунд на ход)
+        self._action(["-", "_"], lambda: self.change_speed(1))
         self._action(["Ctrl+S"], self.save)
         self._action(["Ctrl+L"], self.load)
         self._action(["Ctrl+N"], self.new_game)
@@ -366,8 +443,11 @@ class MainWindow(QMainWindow):
         self.event_lbl.setText(s.current_event or "Новая игра — удачи на бирже!")
         self.news.set_lines(s.log)
         self.next_btn.setEnabled(s.status is GameStatus.PLAYING)
+        self._update_mode_controls()
         mods = [f"{self._mod_label(m)} ({m.turns_left})" for m in s.modifiers]
-        self.factors.setText("Факторы: " + ", ".join(mods[:3]) if mods else "")
+        full = "Факторы: " + ", ".join(mods) if mods else ""
+        self.factors.setToolTip(full)
+        self.factors.setText(self.factors.fontMetrics().elidedText(full, Qt.TextElideMode.ElideRight, max(self.factors.width() - 6, 300)))
         if (p := self._page()):
             p.refresh()
         elif self._on_bank():
@@ -448,8 +528,12 @@ class MainWindow(QMainWindow):
         self.bank_page.amount.clear()
 
     def next_turn(self) -> None:
+        self._advance(auto=False)
+
+    def _advance(self, auto: bool) -> None:
         if self.game.state.status is not GameStatus.PLAYING:
             return
+        self._elapsed = 0.0
         report = self.game.next_turn()
         parts = []
         if report.rent:
@@ -460,10 +544,78 @@ class MainWindow(QMainWindow):
         self.refresh()
         if report.status is not GameStatus.PLAYING:
             self._game_over()
+        elif auto and report.important:
+            lines = ([report.event.text] if report.event else []) + [l for l in report.lines if "ДЕФОЛТ" in l]
+            self._exec(EventDialog(report.day, lines, report.event.tone if report.event else -1, self))
+            self._elapsed = 0.0
+
+    # ----------------------- реальное время и настройки -----------------------
+    def _exec(self, dlg) -> int:
+        """Показывает модальное окно; пока оно открыто, игровое время стоит."""
+        self._busy += 1
+        try:
+            return dlg.exec()
+        finally:
+            self._busy -= 1
+            self._elapsed = 0.0
+
+    def _on_tick(self) -> None:
+        if not self.realtime or self.paused or self._busy or self.game.state.status is not GameStatus.PLAYING:
+            return
+        self._elapsed += TICK_MS / 1000
+        self.countdown.setValue(int(min(self._elapsed / self.speed, 1.0) * 1000))
+        if self._elapsed >= self.speed:
+            self._advance(auto=True)
+
+    def _save_settings(self) -> None:
+        storage.save_settings({"realtime": self.realtime, "speed": self.speed, "period": self.period})
+
+    def _update_mode_controls(self) -> None:
+        if self.realtime:
+            self.mode_btn.setText(f"[M] Реальное время · {self.speed:g}с")
+            self.pause_btn.setText("[P] Дальше" if self.paused else "[P] Пауза")
+        else:
+            self.mode_btn.setText("[M] Режим: пошаговый")
+        self.pause_btn.setVisible(self.realtime)
+        self.countdown.setVisible(self.realtime)
+        self.countdown.setEnabled(not self.paused)
+        self.setWindowTitle("Коммерсант — Retro Edition" + (" [ПАУЗА]" if self.realtime and self.paused else ""))
+
+    def toggle_mode(self) -> None:
+        self.realtime = not self.realtime
+        self.paused = False
+        self._elapsed = 0.0
+        self.countdown.setValue(0)
+        self.say("Реальное время: ход каждые %g с, на важных событиях — пауза. P — пауза, +/− — скорость." % self.speed
+                 if self.realtime else "Пошаговый режим: ход делается кнопкой N.")
+        self._save_settings()
+        self.refresh()
+
+    def toggle_pause(self) -> None:
+        if not self.realtime:
+            return
+        self.paused = not self.paused
+        self.say("Пауза." if self.paused else "Время идёт.")
+        self.refresh()
+
+    def change_speed(self, step: int) -> None:
+        i = min(max(SPEEDS.index(self.speed) + step, 0), len(SPEEDS) - 1)
+        self.speed = SPEEDS[i]
+        self.say(f"Скорость: {self.speed:g} с на ход.")
+        self._save_settings()
+        self.refresh()
+
+    def set_period(self, period: int) -> None:
+        self.period = period
+        self._save_settings()
+        self.refresh()
+
+    def cycle_period(self) -> None:
+        self.set_period(PERIODS[(PERIODS.index(self.period) + 1) % len(PERIODS)])
 
     def _game_over(self) -> None:
         s = self.game.state
-        GameOverDialog(s.status, self.game.net_worth(), min(s.day, s.max_days), self).exec()
+        self._exec(GameOverDialog(s.status, self.game.net_worth(), min(s.day, s.max_days), self))
         storage.add_score(self.game)
         self.say("Результат записан в таблицу рекордов. Ctrl+N — новая игра.")
         self.show_scores()
@@ -473,7 +625,7 @@ class MainWindow(QMainWindow):
         yes = box.addButton("Да (Enter)", QMessageBox.ButtonRole.YesRole)
         box.addButton("Нет (Esc)", QMessageBox.ButtonRole.NoRole)
         box.setDefaultButton(yes)
-        box.exec()
+        self._exec(box)
         return box.clickedButton() is yes
 
     def _in_progress(self) -> bool:
@@ -481,7 +633,7 @@ class MainWindow(QMainWindow):
 
     def new_game(self) -> None:
         dlg = NewGameDialog(self)
-        if dlg.exec() != dlg.DialogCode.Accepted:
+        if self._exec(dlg) != dlg.DialogCode.Accepted.value:
             return
         if self._in_progress() and not self._confirm("Текущая партия будет потеряна. Начать новую?"):
             return
@@ -512,4 +664,4 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def show_scores(self) -> None:
-        HighscoresDialog(storage.load_scores(), self).exec()
+        self._exec(HighscoresDialog(storage.load_scores(), self))
