@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+saves/*.json
+saves/*.tmp
+old/
+.claude/settings.local.json
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
