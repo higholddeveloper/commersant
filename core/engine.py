@@ -1,4 +1,4 @@
-"""Игровой движок: сделки, ход, аренда, банк, победа/поражение."""
+"""Игровой движок: сделки, ход, аренда, банк, собственность, победа/поражение."""
 from __future__ import annotations
 
 import math
@@ -6,7 +6,8 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from . import config, events, market
+from . import config, events, market, patterns, timeline
+from . import property as prop
 from .models import AssetClass, GameState, GameStatus, ModKind
 
 
@@ -21,14 +22,25 @@ class TurnReport:
     deposit_interest: float = 0.0
     loan_interest: float = 0.0
     penalty: float = 0.0
-    event: events.EventResult | None = None
+    utilities: float = 0.0
+    event: events.EventResult | None = None            # главное рыночное событие хода
+    extra: list[events.EventResult] = field(default_factory=list)   # лебеди, происшествия, арест имущества
     status: GameStatus = GameStatus.PLAYING
     lines: list[str] = field(default_factory=list)
 
     @property
+    def all_events(self) -> list[events.EventResult]:
+        return ([self.event] if self.event else []) + self.extra
+
+    @property
     def important(self) -> bool:
         """Важное событие: в режиме реального времени ставит игру на паузу."""
-        return self.event is not None or self.penalty > 0 or self.status is not GameStatus.PLAYING
+        return bool(self.all_events) or self.penalty > 0 or self.status is not GameStatus.PLAYING
+
+    @property
+    def critical(self) -> bool:
+        """Катастрофа (чёрный лебедь, арест имущества, смерть): окно показывается всегда, даже в пошаговом режиме."""
+        return any(e.kind in ("swan", "seize") for e in self.extra)
 
 
 def _floor_step(qty: float, step: float) -> float:
@@ -40,16 +52,24 @@ def _money(x: float) -> str:
 
 
 class Game:
+    # --- пассивный доход от коммерческой недвижимости: 10 / 15 / 20 / 25 % годовых в зависимости от рынка ---
+    RENT_TIERS = (0.10, 0.15, 0.20, 0.25)
+    RENT_LABELS = ("кризис аренды", "спокойный рынок", "рост спроса", "бум аренды")
+    RENT_LOOKBACK = 8
+
     def __init__(self, difficulty: str = config.DEFAULT_DIFFICULTY, seed: int | None = None,
-                 state: GameState | None = None) -> None:
+                 state: GameState | None = None, player: str = "Игрок") -> None:
         if state is None:
             seed = int(time.time() * 1000) % 2**31 if seed is None else seed
             diff = config.DIFFICULTIES[difficulty]
             state = GameState(max_days=diff.max_days, cash=diff.start_cash, start_cash=diff.start_cash,
-                              target=diff.target, difficulty=diff.key, seed=seed)
+                              target=diff.target, difficulty=diff.key, seed=seed, player=player.strip() or "Игрок")
             market.init_market(state)
-            state.log.append("Добро пожаловать на биржу! Цель: "
-                             f"{_money(diff.target)} $ за {diff.max_days} ходов.")
+            boot = random.Random(seed)
+            state.regime = boot.choice(list(patterns.REGIMES))
+            state.regime_left = boot.randint(20, 45)
+            self._append_log(state, f"{state.player}, добро пожаловать на биржу! "
+                                    f"Цель: {_money(diff.target)} $ за {diff.max_days} ходов.", 0)
         self.state = state
         self.diff = config.DIFFICULTIES[state.difficulty]
         self.rng = random.Random(state.seed + state.day * 7919)
@@ -77,16 +97,41 @@ class Game:
     def portfolio_value(self) -> float:
         return round(sum(self.qty(a.symbol) * self.price(a.symbol) for a in config.ASSETS), 2)
 
+    def property_value(self) -> float:
+        """Собственность (жильё и транспорт) по цене обычной продажи."""
+        s = self.state
+        return round(prop.sale_value("housing", s.housing) + prop.sale_value("vehicle", s.vehicle), 2)
+
     def net_worth(self) -> float:
         s = self.state
-        return round(s.cash + self.portfolio_value() + s.bank.deposit - s.bank.loan, 2)
+        return round(s.cash + self.portfolio_value() + self.property_value() + s.bank.deposit - s.bank.loan, 2)
 
-    def rent_multiplier(self) -> float:
-        return max(0.0, 1.0 + sum(m.value for m in self.state.modifiers if m.kind is ModKind.RENT))
+    # --- аренда ---
+    def realty_trend(self) -> float:
+        """Средний рост цен коммерческой недвижимости за последние ходы."""
+        vals = []
+        for a in config.assets_of(AssetClass.REALTY):
+            h = self.state.history.get(a.symbol, [])
+            if len(h) >= 2:
+                base = h[-(self.RENT_LOOKBACK + 1)] if len(h) > self.RENT_LOOKBACK else h[0]
+                vals.append(h[-1] / base - 1.0)
+        return sum(vals) / len(vals) if vals else 0.0
+
+    def rent_tier(self) -> int:
+        mods = sum(m.value for m in self.state.modifiers if m.kind is ModKind.RENT)
+        score = self.realty_trend() + 0.5 * mods
+        return 0 if score < -0.02 else 1 if score < 0.02 else 2 if score < 0.06 else 3
+
+    def rent_yield(self) -> float:
+        """Текущая доходность аренды, годовых (0.10 … 0.25)."""
+        return self.RENT_TIERS[self.rent_tier()]
+
+    def rent_label(self) -> str:
+        return self.RENT_LABELS[self.rent_tier()]
 
     def rent_income(self) -> float:
-        base = sum(self.qty(a.symbol) * a.rent for a in config.assets_of(AssetClass.REALTY))
-        return round(base * self.rent_multiplier(), 2)
+        value = sum(self.qty(a.symbol) * self.price(a.symbol) for a in config.assets_of(AssetClass.REALTY))
+        return round(value * self.rent_yield() / timeline.TURNS_PER_YEAR, 2)
 
     def deposit_rate(self) -> float:
         d = sum(m.value for m in self.state.modifiers if m.kind is ModKind.RATE)
@@ -189,12 +234,150 @@ class Game:
             bank.loan, bank.loan_turns_left = 0.0, 0
         return paid
 
+    # ---------------------------- собственность ----------------------------
+    def level_of(self, kind: str) -> int:
+        return self.state.housing if kind == "housing" else self.state.vehicle
+
+    def change_cost(self, kind: str, level: int) -> float:
+        """Доплата за переезд / смену транспорта (отрицательная — вам вернут разницу)."""
+        t = prop.tier(kind, level)
+        return round((t.price if t else 0.0) - prop.sale_value(kind, self.level_of(kind)), 2)
+
+    def change_property(self, kind: str, level: int) -> float:
+        """Купить / обменять (старое продаётся по обычной цене) / продать (level=0). Возвращает доплату."""
+        self._check_playing()
+        if kind not in prop.TIERS or not 0 <= level <= len(prop.TIERS[kind]):
+            raise TradeError("Неизвестный вариант")
+        if level == self.level_of(kind):
+            raise TradeError("Это у вас уже есть.")
+        cost = self.change_cost(kind, level)
+        if cost > self.state.cash + 1e-9:
+            raise TradeError(f"Не хватает денег: нужно {_money(cost)} $")
+        self.state.cash = round(self.state.cash - cost, 2)
+        self._set_level(kind, level)
+        if kind == "housing" and level > 0:
+            self.state.homeless_turns = 0
+        return cost
+
+    def _set_level(self, kind: str, level: int) -> None:
+        if kind == "housing":
+            self.state.housing = level
+        else:
+            self.state.vehicle = level
+
+    def monthly_upkeep(self) -> float:
+        s = self.state
+        t1, t2 = prop.tier("housing", s.housing), prop.tier("vehicle", s.vehicle)
+        return (t1.upkeep if t1 else 0.0) + (t2.upkeep if t2 else 0.0)
+
+    def extend_turns(self) -> None:
+        """Продлевает партию, когда ходы закончились. В таблице рекордов результат помечается «без лимита ходов»."""
+        s = self.state
+        if s.status is not GameStatus.LOST_TIMEOUT:
+            raise TradeError("Продлевать нечего: ходы ещё не закончились.")
+        s.max_days += config.EXTEND_TURNS
+        s.extended = True
+        s.status = GameStatus.PLAYING
+        self._append_log(s, f"Лимит ходов продлён на {config.EXTEND_TURNS}. В рекордах будет пометка «без лимита ходов».", 0)
+
     # -------------------------------- ход --------------------------------
-    def _say(self, report: TurnReport, text: str) -> None:
-        line = f"Д{self.state.day}: {text}"
+    @staticmethod
+    def _append_log(state: GameState, text: str, tone: int) -> None:
+        if len(state.log_tone) < len(state.log):        # старое сохранение без тонов
+            state.log_tone = [0] * (len(state.log) - len(state.log_tone)) + state.log_tone
+        state.log.append(text)
+        state.log_tone.append(tone)
+        del state.log[: -config.LOG_LEN]
+        del state.log_tone[: -config.LOG_LEN]
+
+    def _say(self, report: TurnReport, text: str, tone: int = 0) -> None:
+        line = f"{timeline.fmt_date(self.state.day)}: {text}"
         report.lines.append(line)
-        self.state.log.append(line)
-        del self.state.log[: -config.LOG_LEN]
+        self._append_log(self.state, line, tone)
+
+    def _event(self, rep: TurnReport, ev_id: str, text: str, tone: int, kind: str) -> None:
+        rep.extra.append(events.EventResult(ev_id, text, tone, kind))
+        self._say(rep, text, tone)
+
+    def _pay(self, amount: float) -> bool:
+        """Оплата счёта: сначала наличные, затем вклад. False — денег не хватает (ничего не списано)."""
+        s = self.state
+        if amount <= 0:
+            return True
+        if max(s.cash, 0.0) + s.bank.deposit < amount - 1e-9:
+            return False
+        from_cash = min(max(s.cash, 0.0), amount)
+        s.cash = round(s.cash - from_cash, 2)
+        s.bank.deposit = round(s.bank.deposit - (amount - from_cash), 2)
+        return True
+
+    def _utilities(self, rep: TurnReport) -> None:
+        due = self.monthly_upkeep()
+        if due <= 0:
+            return
+        rep.utilities = due
+        if not self._pay(due):   # денег не хватает — уходим в минус; банк потом опишет имущество
+            self.state.cash = round(self.state.cash - due, 2)
+        self._say(rep, f"коммунальные платежи и содержание авто −{_money(due)} $", 0)
+
+    def _life(self, rep: TurnReport) -> None:
+        """Происшествия с жильём и транспортом, бездомность, болезни, смерть."""
+        s = self.state
+        for kind in ("housing", "vehicle"):
+            level = self.level_of(kind)
+            out = prop.roll_mishap(kind, level, s.cash, self.rng, self.diff.bad_event_bias)
+            if out is None:
+                continue
+            s.cash = round(s.cash + out.cash_delta, 2)
+            if out.destroyed:
+                self._set_level(kind, 0)
+            self._event(rep, out.mishap.id, out.text, out.tone, "life")
+        if s.housing > 0:
+            s.homeless_turns = 0
+            s.illnesses = 0
+            return
+        s.homeless_turns += 1
+        n = s.homeless_turns
+        if n == 1:
+            self._event(rep, "homeless_start", f"Вы остались без жилья! Через {prop.HOMELESS_GRACE - 1} х. "
+                                               "начнутся болезни — срочно купите хотя бы конуру.", -1, "life")
+        elif n < prop.HOMELESS_GRACE:
+            if n == prop.HOMELESS_GRACE - 2:
+                self._event(rep, "homeless_cold", "Ночи холодные, вы кашляете. Крышу над головой — как можно скорее!", -1, "life")
+        elif self.rng.random() < 0.45:
+            s.illnesses += 1
+            bill = round(self.rng.uniform(2_000, 6_000), -1)
+            if s.illnesses >= prop.MAX_ILLNESSES:
+                self._die(rep, "Третья болезнь на улице — организм не выдержал. Вы умерли.")
+            elif self._pay(bill):
+                self._event(rep, "homeless_ill", f"Вы заболели на улице. Счёт за лечение −{_money(bill)} $ "
+                                                 f"(болезнь {s.illnesses} из {prop.MAX_ILLNESSES - 1}).", -1, "life")
+            else:
+                self._die(rep, f"Вы тяжело заболели, но на лечение ({_money(bill)} $) не хватило денег. Вы умерли.")
+
+    def _die(self, rep: TurnReport, text: str) -> None:
+        self.state.status = GameStatus.LOST_DEATH
+        self._event(rep, "death", text, -1, "seize")
+
+    def _enforce(self, rep: TurnReport, immediate: bool) -> None:
+        """Банк арестовывает и распродаёт имущество за долги: сразу при дефолте, иначе после двух ходов в минусе."""
+        s = self.state
+        if s.cash >= 0:
+            s.overdue_turns = 0
+            return
+        s.overdue_turns += 1
+        if not immediate and s.overdue_turns < 2:
+            self._say(rep, f"на счёте минус {_money(-s.cash)} $ — пополните его, иначе банк опишет имущество!", -1)
+            return
+        for kind in ("vehicle", "housing"):
+            level = self.level_of(kind)
+            if level <= 0 or s.cash >= 0:
+                continue
+            value = prop.sale_value(kind, level, prop.SEIZE_FACTOR)
+            name = prop.name_of(kind, level)
+            s.cash = round(s.cash + value, 2)
+            self._set_level(kind, 0)
+            self._event(rep, f"seize_{kind}", f"БАНК АРЕСТОВАЛ И ПРОДАЛ «{name}» за {_money(value)} $ в счёт долга.", -1, "seize")
 
     def next_turn(self) -> TurnReport:
         s = self.state
@@ -202,45 +385,66 @@ class Game:
         s.day += 1
         self.rng = random.Random(s.seed + s.day * 7919)
         rep = TurnReport(day=s.day)
+        defaulted = False
 
         # 1) пассивный доход: аренда, вклад, кредит
         rep.rent = self.rent_income()
         if rep.rent:
             s.cash = round(s.cash + rep.rent, 2)
-            self._say(rep, f"аренда +{_money(rep.rent)} $")
+            self._say(rep, f"аренда +{_money(rep.rent)} $ ({self.rent_yield() * 100:.0f}% годовых, {self.rent_label()})", +1)
         if s.bank.deposit > 0:
             rep.deposit_interest = round(s.bank.deposit * self.deposit_rate(), 2)
             s.bank.deposit = round(s.bank.deposit + rep.deposit_interest, 2)
-            self._say(rep, f"проценты по вкладу +{_money(rep.deposit_interest)} $")
+            self._say(rep, f"проценты по вкладу +{_money(rep.deposit_interest)} $", +1)
         if s.bank.loan > 0:
             rep.loan_interest = round(s.bank.loan * self.loan_rate(), 2)
             s.bank.loan = round(s.bank.loan + rep.loan_interest, 2)
             s.bank.loan_turns_left -= 1
             if s.bank.loan_turns_left <= 0:
+                defaulted = True
                 rep.penalty = round(s.bank.loan * self.diff.default_penalty, 2)
                 total = round(s.bank.loan + rep.penalty, 2)
                 s.cash = round(s.cash - total, 2)  # может уйти в минус
                 s.bank.loan, s.bank.loan_turns_left = 0.0, 0
-                self._say(rep, f"ДЕФОЛТ по кредиту! Списано {_money(total)} $ (штраф {_money(rep.penalty)} $)")
+                self._say(rep, f"ДЕФОЛТ по кредиту! Списано {_money(total)} $ (штраф {_money(rep.penalty)} $)", -1)
             else:
-                self._say(rep, f"кредит: +{_money(rep.loan_interest)} $ процентов, "
-                               f"срок {s.bank.loan_turns_left} х.")
+                self._say(rep, f"кредит: +{_money(rep.loan_interest)} $ процентов, срок {s.bank.loan_turns_left} х.", 0)
 
-        # 2) цены, затем события; модификаторы «стареют» после пересчёта цен
+        # 2) ежемесячные коммунальные платежи
+        if timeline.month_changed(s.day):
+            self._utilities(rep)
+
+        # 3) цены, чёрные лебеди, затем события; модификаторы «стареют» после пересчёта цен
         market.step_prices(s, self.rng)
         events.tick_modifiers(s)
+        swan = patterns.roll_swan(s, self.rng)
+        if swan:
+            self._event(rep, "swan_" + swan.id, f"ЧЁРНЫЙ ЛЕБЕДЬ · {swan.title}: {swan.text}", -1, "swan")
         rep.event = events.roll_event(s, self.rng, self.diff)
-        s.current_event = rep.event.text if rep.event else "Тихий день на рынке."
-        self._say(rep, s.current_event)
+        if rep.event:
+            self._say(rep, rep.event.text, rep.event.tone)
 
-        # 3) победа / поражение
+        # 4) жильё и транспорт, болезни; долги и арест имущества
+        self._life(rep)
+        if s.status is GameStatus.PLAYING:
+            self._enforce(rep, immediate=defaulted)
+
+        shown = rep.all_events
+        s.current_event = "  ▪  ".join(e.text for e in shown) if shown else "Тихий день на рынке."
+        s.current_tone = min(e.tone for e in shown) if any(e.tone for e in shown) else 0
+        if not shown:
+            self._say(rep, s.current_event)
+
+        # 5) победа / поражение
         rep.status = self._evaluate_status()
         if rep.status is not GameStatus.PLAYING:
-            self._say(rep, _STATUS_TEXT[rep.status])
+            self._say(rep, _STATUS_TEXT[rep.status], +1 if rep.status is GameStatus.WON else -1)
         return rep
 
     def _evaluate_status(self) -> GameStatus:
         s = self.state
+        if s.status is GameStatus.LOST_DEATH:
+            return s.status
         nw = self.net_worth()
         if nw >= s.target:
             s.status = GameStatus.WON
@@ -253,12 +457,14 @@ class Game:
     def score(self) -> dict:
         """Данные для таблицы рекордов."""
         s = self.state
-        return {"net_worth": self.net_worth(), "days": min(s.day, s.max_days), "status": s.status.value,
-                "difficulty": s.difficulty}
+        return {"name": s.player, "net_worth": self.net_worth(), "days": min(s.day, s.max_days),
+                "status": s.status.value, "difficulty": s.difficulty, "extended": s.extended,
+                "max_days": s.max_days, "game_date": timeline.fmt_date(s.day)}
 
 
 _STATUS_TEXT = {
     GameStatus.WON: "ЦЕЛЬ ДОСТИГНУТА — вы победили!",
     GameStatus.LOST_BANKRUPT: "БАНКРОТСТВО — игра окончена.",
     GameStatus.LOST_TIMEOUT: "Ходы закончились, цель не достигнута.",
+    GameStatus.LOST_DEATH: "ВЫ УМЕРЛИ — игра окончена.",
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
@@ -18,6 +19,7 @@ def main() -> int:
     app.setStyleSheet(theme.QSS)
     window = MainWindow()
     window.show()
+    QTimer.singleShot(0, window.start_game)   # приглашение ввести имя игрока
     return app.exec()
 
 

@@ -72,7 +72,7 @@ def test_report_important_on_event():
     while g.state.status is GameStatus.PLAYING:
         r = g.next_turn()
         seen[r.important] += 1
-        if r.event is None and r.status is GameStatus.PLAYING and r.penalty == 0:
+        if not r.all_events and r.status is GameStatus.PLAYING and r.penalty == 0:
             assert r.important is False
     assert seen[True] > 0 and seen[False] > 0
 
@@ -80,8 +80,8 @@ def test_report_important_on_event():
 def test_settings_roundtrip_and_defaults(tmp_path):
     path = tmp_path / "settings.json"
     assert storage.load_settings(path) == storage.DEFAULT_SETTINGS
-    storage.save_settings({"realtime": True, "speed": 5.0, "period": 60}, path)
-    assert storage.load_settings(path) == {"realtime": True, "speed": 5.0, "period": 60}
+    storage.save_settings({"realtime": True, "speed": 5.0, "period": 60, "last_name": "Аня"}, path)
+    assert storage.load_settings(path) == {"realtime": True, "speed": 5.0, "period": 60, "last_name": "Аня"}
     path.write_text("{broken", encoding="utf-8")
     assert storage.load_settings(path) == storage.DEFAULT_SETTINGS
 

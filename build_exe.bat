@@ -8,6 +8,8 @@ if not exist ".venv\Scripts\python.exe" python -m venv .venv
 if exist dist\Commersant\saves rmdir /s /q dist\Commersant\saves
 copy /y commercial.man dist\Commersant\commercial.man >nul
 copy /y README.md dist\Commersant\README.md >nul
-powershell -NoProfile -Command "Compress-Archive -Path 'dist\Commersant' -DestinationPath 'dist\Commersant-win64.zip' -Force"
+".venv\Scripts\python.exe" -c "from core.version import VERSION; print(VERSION)" > builder.txt
+set /p VER=<builder.txt
+powershell -NoProfile -Command "Compress-Archive -Path 'dist\Commersant' -DestinationPath 'dist\Commersant-v%VER%-win64.zip' -Force"
 echo.
-echo Готово: dist\Commersant-win64.zip
+echo Готово: dist\Commersant-v%VER%-win64.zip

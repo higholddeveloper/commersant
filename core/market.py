@@ -1,10 +1,10 @@
-"""Генерация цен: тренд + волатильность + активные модификаторы + мягкий возврат к среднему."""
+"""Генерация цен: тренд + торговые фигуры + волатильность + модификаторы событий + мягкий возврат к среднему."""
 from __future__ import annotations
 
 import math
 import random
 
-from . import config
+from . import config, patterns
 from .models import Asset, GameState, ModKind
 
 
@@ -30,10 +30,12 @@ def init_market(state: GameState) -> None:
 def step_prices(state: GameState, rng: random.Random) -> None:
     """Один шаг рынка: пересчитывает цены и дописывает историю."""
     lo, hi = config.MAX_TURN_RETURN
+    patterns.update_regime(state, rng)
     for a in config.ASSETS:
         price = state.prices[a.symbol]
-        reversion = config.MEAN_REVERSION * math.log(fair_price(a, state.day) / price)
-        ret = a.drift + rng.gauss(0.0, a.volatility) + modifier_drift(state, a) + reversion
+        shape, vol_mult, rev_mult = patterns.step_asset(state, a, rng)
+        reversion = config.MEAN_REVERSION * rev_mult * math.log(fair_price(a, state.day) / price)
+        ret = a.drift + shape + rng.gauss(0.0, a.volatility * vol_mult) + modifier_drift(state, a) + reversion
         ret = min(max(ret, lo), hi)
         new_price = max(price * (1.0 + ret), a.base_price * config.PRICE_FLOOR_RATIO)
         state.prices[a.symbol] = _round_price(new_price)

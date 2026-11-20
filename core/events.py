@@ -45,6 +45,7 @@ class EventResult:
     event_id: str
     text: str                  # итоговая строка для ленты новостей
     tone: int
+    kind: str = "market"       # market | swan | life | bank
 
 
 def _e(kind: EffectKind, target: str = "ALL", lo: float = 0.0, hi: float | None = None, turns: int = 0) -> Effect:

@@ -1,8 +1,8 @@
 import pytest
 
-from core import storage
+from core import config, storage
 from core.engine import Game, TradeError
-from core.models import GameStatus, ModKind, Modifier
+from core.models import AssetClass, GameStatus, ModKind, Modifier
 
 
 @pytest.fixture
@@ -11,8 +11,9 @@ def g() -> Game:
 
 
 def test_start_state(g):
-    assert g.state.cash == 100_000 and g.state.day == 1 and g.state.max_days == 150
-    assert g.net_worth() == 100_000
+    assert g.state.cash == 100_000 and g.state.day == 1 and g.state.max_days == 250
+    assert g.state.housing == 1 and g.state.vehicle == 1          # конура и мопед
+    assert g.net_worth() == pytest.approx(100_000 + g.property_value())
 
 
 def test_buy_sell_uses_spread(g):
@@ -51,16 +52,26 @@ def test_percent_helpers(g):
 
 def test_rent_paid_at_turn_start(g):
     g.buy("STUDIO", 1)
+    expected = g.rent_income()
+    assert expected > 0
     rep = g.next_turn()
-    assert rep.rent == 300
-    assert g.state.day == 2
-    assert g.rent_income() == 300
+    assert rep.rent > 0 and g.state.day == 2
+    assert expected == pytest.approx(60_000 * g.RENT_TIERS[1] / 52, rel=0.2)   # ~15% годовых на старте
 
 
-def test_rent_modifier(g):
+def test_rent_yield_depends_on_market(g):
     g.state.holdings["STUDIO"] = 2
+    assert g.rent_yield() == 0.15 and g.rent_label() == "спокойный рынок"
     g.state.modifiers.append(Modifier(ModKind.RENT, "realty", 0.5, 3))
-    assert g.rent_income() == pytest.approx(900)
+    assert g.rent_yield() == 0.25
+    g.state.modifiers[:] = [Modifier(ModKind.RENT, "realty", -0.4, 3)]
+    assert g.rent_yield() == 0.10
+    g.state.modifiers.clear()
+    for a in config.assets_of(AssetClass.REALTY):      # цены выросли на 5% за 8 ходов -> «рост спроса»
+        g.state.history[a.symbol] = [100.0] * 8 + [105.0]
+    assert g.rent_yield() == 0.20
+    value = 2 * g.price("STUDIO")
+    assert g.rent_income() == pytest.approx(value * 0.20 / 52, rel=1e-3)
 
 
 def test_deposit_interest(g):
@@ -75,12 +86,12 @@ def test_deposit_interest(g):
 
 def test_loan_limit_and_repay(g):
     limit = g.max_loan()
-    assert limit == pytest.approx(50_000)
+    assert limit == pytest.approx(0.5 * g.net_worth())
     with pytest.raises(TradeError):
         g.take_loan(limit + 1)
     g.take_loan(20_000)
     assert g.state.bank.loan == 20_000 and g.state.bank.loan_turns_left == 10
-    assert g.net_worth() == pytest.approx(100_000)  # долг компенсирован наличными
+    assert g.net_worth() == pytest.approx(100_000 + g.property_value())  # долг компенсирован наличными
     assert g.repay_loan(5_000) == 5_000
     g.repay_loan(1_000_000)
     assert g.state.bank.loan == 0 and g.state.bank.loan_turns_left == 0
@@ -107,18 +118,34 @@ def test_win_condition(g):
 
 
 def test_bankruptcy(g):
-    g.state.cash = -10_000
+    g.state.cash = -100_000
     rep = g.next_turn()
     assert rep.status is GameStatus.LOST_BANKRUPT
 
 
-def test_timeout():
-    g = Game(seed=2)
+def _play_until_end(g):
     status = GameStatus.PLAYING
     while status is GameStatus.PLAYING:
         status = g.next_turn().status
-    assert status is GameStatus.LOST_TIMEOUT
-    assert g.state.day == g.state.max_days + 1
+    return status
+
+
+def test_timeout_and_extension():
+    g = Game(seed=2)
+    g.state.target = 10**12                      # недостижимая цель — упираемся в лимит ходов
+    g.state.cash, g.state.housing, g.state.vehicle = 5_000_000, 3, 3
+    assert _play_until_end(g) is GameStatus.LOST_TIMEOUT
+    assert g.state.day == g.state.max_days + 1 == 251
+    g.extend_turns()
+    assert g.state.status is GameStatus.PLAYING and g.state.extended
+    assert g.state.max_days == 250 + config.EXTEND_TURNS
+    assert _play_until_end(g) is GameStatus.LOST_TIMEOUT
+    assert g.score()["extended"] is True
+
+
+def test_extend_only_after_timeout(g):
+    with pytest.raises(TradeError):
+        g.extend_turns()
 
 
 def test_same_seed_same_game():
@@ -154,7 +181,7 @@ def test_load_corrupted(tmp_path):
 
 def test_highscores_sorted_and_capped(tmp_path):
     path = tmp_path / "hs.json"
-    for i in range(12):
+    for i in range(storage.MAX_SCORES + 3):
         g = Game(seed=i)
         g.state.cash = 1000 * i
         storage.add_score(g, path=path)

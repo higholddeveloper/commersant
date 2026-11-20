@@ -1,9 +1,11 @@
 """Кастомные виджеты: мини-график, поле количества, новостная лента, форматирование."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
+from html import escape
+
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import QLineEdit, QPlainTextEdit, QSizePolicy, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QLineEdit, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
 
 from . import theme
 
@@ -120,16 +122,65 @@ class QtyEdit(QLineEdit):
         return super().event(e)
 
 
-class NewsLog(QPlainTextEdit):
-    """Ретро-лента новостей: только чтение, прокрутка к последнему сообщению."""
+class NewsLog(QTextEdit):
+    """Ретро-лента новостей: только чтение, прокрутка к последнему сообщению; плохое — красным, хорошее — зелёным."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setReadOnly(True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setMaximumBlockCount(200)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
 
-    def set_lines(self, lines: list[str]) -> None:
-        self.setPlainText("\n".join(lines))
+    def set_lines(self, lines: list[str], tones: list[int] | None = None) -> None:
+        tones = (list(tones or []) + [0] * len(lines))[-len(lines):] if lines else []
+        if len(tones) < len(lines):
+            tones = [0] * (len(lines) - len(tones)) + tones
+        color = {1: theme.UP, -1: theme.DOWN, 0: theme.TEXT}
+        self.setHtml("<br>".join(f"<span style='color:{color[t]}'>{escape(line)}</span>"
+                                 for line, t in zip(lines, tones)))
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+
+class Toast(QFrame):
+    """Выпадающее сообщение поверх окна: красное — неприятность, зелёное — удача, янтарное — нейтральное."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("toast")
+        self.label = QLabel()
+        self.label.setTextFormat(Qt.TextFormat.RichText)
+        self.label.setWordWrap(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.addWidget(self.label)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.hide)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.hide()
+
+    def show_messages(self, items: list[tuple[str, int]], ms: int = 6000) -> None:
+        if not items:
+            return
+        worst = min(t for _, t in items) if any(t < 0 for _, t in items) else max(t for _, t in items)
+        border, bg = theme.tone_color(worst), theme.tone_bg(worst)
+        self.setStyleSheet(f"QFrame#toast {{ background: {bg}; border: 2px solid {border}; }}"
+                           "QLabel { background: transparent; font-size: 11pt; }")
+        self.label.setText("<br>".join(f"<span style='color:{theme.tone_color(t)}'>{icon_for(t)} {escape(text)}</span>"
+                                       for text, t in items))
+        width = min(self.parentWidget().width() - 40, 640)
+        self.setFixedWidth(width)
+        self.label.setFixedWidth(width - 26)
+        self.adjustSize()
+        self.move((self.parentWidget().width() - self.width()) // 2, 52)
+        self.raise_()
+        self.show()
+        self.timer.start(ms)
+
+    def mousePressEvent(self, _event) -> None:  # noqa: N802
+        self.timer.stop()
+        self.hide()
+
+
+def icon_for(tone: int) -> str:
+    return "▲" if tone > 0 else "▼" if tone < 0 else "●"
