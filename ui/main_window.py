@@ -112,7 +112,7 @@ class MarketPage(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.trend.setFixedHeight(36)
         self.held.setFixedHeight(36)
-        self.extra.setFixedHeight(36)
+        self.extra.setFixedHeight(66)
         self.spark = Sparkline()
 
         self.period_btns: dict[int, QPushButton] = {}
@@ -229,8 +229,9 @@ class MarketPage(QWidget):
         extra = []
         if a.cls is AssetClass.REALTY:
             per = g.price(a.symbol) * g.rent_yield() / timeline.TURNS_PER_YEAR
-            extra.append(f"Пассивный доход: <b>{g.rent_yield() * 100:.0f}% годовых</b> ({g.rent_label()}) — "
-                         f"≈{fmt_money(per)}/ход с объекта, всего у вас {fmt_money(g.rent_income())}/ход")
+            extra.append(f"Аренда: <b>{g.rent_yield() * 100:.0f}% годовых</b> ({g.rent_label()}) · "
+                         f"≈{fmt_money(per)}/ход с объекта, всего {fmt_money(g.rent_income())}/ход · "
+                         f"налог при продаже: 3% с прибыли")
         shape = patterns.hint(g.state, a.symbol)
         if shape:
             p, progress = shape
@@ -443,7 +444,7 @@ class BankPage(QWidget):
         self.win = win
         self.info = _label()
         self.info.setTextFormat(Qt.TextFormat.RichText)
-        self.hint = _label("Пустое поле — вся доступная сумма. Кредит: срок ограничен, при просрочке — дефолт, штраф "
+        self.hint = _label("Пустое поле — вся доступная сумма. Кредит на 30 ходов, при просрочке — дефолт, штраф "
                            "и арест имущества (банк сразу продаёт машину и жильё).", "dim")
         self.hint.setWordWrap(True)
         self.amount = QtyEdit("")
@@ -702,7 +703,7 @@ class MainWindow(QMainWindow):
         if s.cash < 0:
             warn.append("минус на счёте — банк опишет имущество!")
         mods = [f"{self._mod_label(m)} ({m.turns_left})" for m in s.modifiers]
-        full = " ".join(warn) + (" " if warn else "") + f"Рынок: {patterns.REGIMES.get(s.regime, '—')}" \
+        full = " ".join(warn) + (" " if warn else "") + f"Рынок: {patterns.REGIMES.get(s.regime, '—')}" + (" · ТИШИНА" if s.calm else "") \
             + (" · Факторы: " + ", ".join(mods) if mods else "")
         self.factors.setStyleSheet(f"color: {theme.DOWN if warn else theme.DIM};")
         self.factors.setToolTip(full)
@@ -754,7 +755,8 @@ class MainWindow(QMainWindow):
                       lambda c: f"Куплено {fmt_qty(qty)} {a.unit} {sym} за {fmt_money(c)}")
         else:
             self._run(lambda: self.game.sell(sym, qty),
-                      lambda c: f"Продано {fmt_qty(qty)} {a.unit} {sym} за {fmt_money(c)}")
+                      lambda c: f"Продано {fmt_qty(qty)} {a.unit} {sym} за {fmt_money(c)}"
+                                + (f" (налог 3% с прибыли: {fmt_money(self.game.last_tax)})" if self.game.last_tax else ""))
 
     def trade_pct(self, side: str, pct: float) -> None:
         page = self._page()

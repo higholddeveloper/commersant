@@ -122,7 +122,7 @@ def test_swans_appear_in_game_as_critical_reports():
                 found += 1
                 assert rep.critical and rep.important
                 assert "ЧЁРНЫЙ ЛЕБЕДЬ" in g.state.log[-1] or any("ЧЁРНЫЙ ЛЕБЕДЬ" in line for line in rep.lines)
-    assert 40 * 120 * patterns.SWAN_CHANCE * 0.5 < found < 40 * 120 * patterns.SWAN_CHANCE * 1.8
+    assert 40 * 120 * patterns.SWAN_CHANCE * 0.3 < found < 40 * 120 * patterns.SWAN_CHANCE * 1.8
 
 
 def test_prices_stay_sane_with_patterns():

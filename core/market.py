@@ -35,6 +35,9 @@ def step_prices(state: GameState, rng: random.Random) -> None:
         price = state.prices[a.symbol]
         shape, vol_mult, rev_mult = patterns.step_asset(state, a, rng)
         reversion = config.MEAN_REVERSION * rev_mult * math.log(fair_price(a, state.day) / price)
+        if state.calm:   # тишина: упавшее падает чуть-чуть, выросшее чуть-чуть растёт
+            shape *= config.CALM_SHAPE
+            vol_mult *= config.CALM_SHAPE
         ret = a.drift + shape + rng.gauss(0.0, a.volatility * vol_mult) + modifier_drift(state, a) + reversion
         ret = min(max(ret, lo), hi)
         new_price = max(price * (1.0 + ret), a.base_price * config.PRICE_FLOOR_RATIO)

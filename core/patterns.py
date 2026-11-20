@@ -168,19 +168,19 @@ SWANS: tuple[Swan, ...] = (
           ("OIL", "swan_spike", 2.4)), 1.0),
     Swan("bank_run", "БАНКОВСКИЙ КРИЗИС", "Крупные банки лопаются, вкладчики штурмуют отделения — паника на всех рынках.",
          (("stock", "swan_crash", 1.6), ("realty", "swan_crash", 1.6), ("crypto", "swan_crash", 1.1),
-          ("JPM", "swan_crash", 2.4)), 0.8, 0.03),
+          ("JPM", "swan_crash", 2.4)), 0.8, 0.015),
     Swan("exchange_collapse", "КРАХ КРИПТОБИРЖИ", "Одна из крупнейших криптобирж обанкротилась: доверие к крипте разрушено.",
          (("crypto", "swan_crash", 2.6),), 0.8),
     Swan("cyber_attack", "КИБЕРАТАКА ГОДА", "Массовая хакерская атака парализовала технологические компании и платёжные системы.",
          (("crypto", "swan_crash", 1.0), ("NVDA", "swan_crash", 2.0), ("MSFT", "swan_crash", 2.0),
-          ("GOOGL", "swan_crash", 1.8), ("META", "swan_crash", 1.8), ("V", "swan_crash", 2.0)), 0.7, 0.02),
+          ("GOOGL", "swan_crash", 1.8), ("META", "swan_crash", 1.8), ("V", "swan_crash", 2.0)), 0.7, 0.01),
     Swan("black_monday", "ЧЁРНЫЙ ПОНЕДЕЛЬНИК", "Биржи рухнули за один день — самый резкий обвал за поколение!",
          (("stock", "swan_crash", 2.4), ("crypto", "swan_crash", 1.6), ("commodity", "swan_crash", 1.0)), 0.7),
     Swan("ai_breakthrough", "ТЕХНОЛОГИЧЕСКИЙ ПРОРЫВ", "Прорыв в области ИИ: технологические гиганты взлетают.",
          (("NVDA", "swan_spike", 2.2), ("MSFT", "swan_spike", 1.6), ("GOOGL", "swan_spike", 1.5),
           ("AMZN", "swan_spike", 1.3), ("META", "swan_spike", 1.3)), 0.6),
 )
-SWAN_CHANCE = 0.012   # за ход (~3 за партию в 250 ходов)
+SWAN_CHANCE = 0.02   # за ход (~3 за партию в 250 ходов)
 
 
 def targets(spec: str) -> list[Asset]:

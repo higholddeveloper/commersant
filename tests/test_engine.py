@@ -11,9 +11,9 @@ def g() -> Game:
 
 
 def test_start_state(g):
-    assert g.state.cash == 100_000 and g.state.day == 1 and g.state.max_days == 250
+    assert g.state.cash == 200_000 and g.state.day == 1 and g.state.max_days == 250
     assert g.state.housing == 1 and g.state.vehicle == 1          # конура и мопед
-    assert g.net_worth() == pytest.approx(100_000 + g.property_value())
+    assert g.net_worth() == pytest.approx(200_000 + g.property_value())
 
 
 def test_buy_sell_uses_spread(g):
@@ -22,7 +22,7 @@ def test_buy_sell_uses_spread(g):
     assert g.qty("OIL") == 100
     proceeds = g.sell("OIL", 100)
     assert proceeds == pytest.approx(100 * 70 * 0.99)
-    assert g.state.cash < 100_000  # спред — плата за круг
+    assert g.state.cash < 200_000  # спред — плата за круг
 
 
 def test_buy_errors(g):
@@ -90,8 +90,8 @@ def test_loan_limit_and_repay(g):
     with pytest.raises(TradeError):
         g.take_loan(limit + 1)
     g.take_loan(20_000)
-    assert g.state.bank.loan == 20_000 and g.state.bank.loan_turns_left == 10
-    assert g.net_worth() == pytest.approx(100_000 + g.property_value())  # долг компенсирован наличными
+    assert g.state.bank.loan == 20_000 and g.state.bank.loan_turns_left == 30
+    assert g.net_worth() == pytest.approx(200_000 + g.property_value())  # долг компенсирован наличными
     assert g.repay_loan(5_000) == 5_000
     g.repay_loan(1_000_000)
     assert g.state.bank.loan == 0 and g.state.bank.loan_turns_left == 0
@@ -108,7 +108,7 @@ def test_loan_default_penalty(g):
 
 
 def test_win_condition(g):
-    g.state.cash = g.state.target
+    g.state.cash = g.state.target * 2
     rep = g.next_turn()
     assert rep.status is GameStatus.WON
     with pytest.raises(TradeError):

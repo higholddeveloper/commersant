@@ -99,4 +99,6 @@ class GameState:
     # --- журнал ---
     log_tone: list[int] = field(default_factory=list)   # тон каждой записи лога: +1 хорошо, -1 плохо
     current_tone: int = 0
+    calm: bool = False             # на рынке тишина: тренды слабые, событий почти нет
+    calm_left: int = 0
     slot: str = ""                 # имя последнего слота сохранения

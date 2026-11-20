@@ -172,7 +172,8 @@ class Toast(QFrame):
         self.setFixedWidth(width)
         self.label.setFixedWidth(width - 26)
         self.adjustSize()
-        self.move((self.parentWidget().width() - self.width()) // 2, 52)
+        self.move((self.parentWidget().width() - self.width()) // 2,
+                  max(52, (self.parentWidget().height() - self.height()) // 2 - 20))
         self.raise_()
         self.show()
         self.timer.start(ms)

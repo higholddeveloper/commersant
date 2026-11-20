@@ -8,6 +8,9 @@ SELL_FACTOR = 0.85        # обычная продажа / обмен
 SEIZE_FACTOR = 0.70       # распродажа имущества банком
 SECURE_FROM = 3           # с этого уровня есть охрана / сигнализация — грабители не страшны
 INSURED_FROM = 3          # с этого уровня имущество застраховано — вместо штрафа компенсация
+LOSS_SCALE = 0.5          # суммы потерь и штрафов вдвое меньше
+MISHAP_SCALE = 0.5        # происшествия вдвое реже
+ILLNESS_CHANCE = 0.22     # шанс заболеть за ход без жилья (после льготного срока)
 HOMELESS_GRACE = 5        # столько ходов без жилья можно продержаться, затем начинаются болезни
 MAX_ILLNESSES = 3         # третья болезнь на улице — смерть
 
@@ -117,7 +120,7 @@ def roll_mishap(kind: str, level: int, cash: float, rng: random.Random, bias: fl
     pool = [m for m in MISHAPS if m.kind == kind and level in m.levels]
     if not pool:
         return None
-    total = min(sum(m.chance for m in pool) * bias, 0.95)
+    total = min(sum(m.chance for m in pool) * bias * MISHAP_SCALE, 0.95)
     if rng.random() >= total:
         return None
     m = rng.choices(pool, weights=[x.chance for x in pool], k=1)[0]
@@ -134,15 +137,15 @@ def resolve(m: Mishap, level: int, cash: float, rng: random.Random) -> MishapOut
         return MishapOutcome(m, f"{m.text} Вы остались без {'жилья' if m.kind == 'housing' else 'транспорта'}.",
                              -1, 0.0, True)
     if m.cash_pct:
-        loss = round(max(cash, 0.0) * rng.uniform(*m.cash_pct), -1)
+        loss = round(max(cash, 0.0) * rng.uniform(*m.cash_pct) * LOSS_SCALE, -1)
         if loss <= 0:
             return MishapOutcome(m, f"{m.text} Но брать было нечего — обошлось.", 0)
         return MishapOutcome(m, f"{m.text} −{_money(loss)}", -1, -loss)
     if m.repair_pct:
-        cost = max(round(value * rng.uniform(*m.repair_pct), -1), 50.0)
+        cost = max(round(value * rng.uniform(*m.repair_pct) * LOSS_SCALE, -1), 50.0)
         return MishapOutcome(m, f"{m.text} −{_money(cost)}", -1, -cost)
     if m.fine:
-        cost = round(rng.uniform(*m.fine), -1)
+        cost = round(rng.uniform(*m.fine) * LOSS_SCALE, -1)
         return MishapOutcome(m, f"{m.text} −{_money(cost)}", -1, -cost)
     return MishapOutcome(m, m.text, 0)
 

@@ -42,7 +42,7 @@ def test_cash_and_holding_effects():
     ev = EventDef("t", "x", "t", (Effect(EffectKind.CASH, "ALL", 1000, 1000),
                                   Effect(EffectKind.HOLDING_PCT, "OIL", -0.5, -0.5)))
     events.apply_event(s, ev, random.Random(1))
-    assert s.cash == 101_000
+    assert s.cash == 201_000
     assert s.holdings["OIL"] == 50
 
 
@@ -51,7 +51,7 @@ def test_repair_costs_per_property():
     s.holdings["STUDIO"] = 3
     ev = EventDef("t", "realty", "t", (Effect(EffectKind.REPAIR, "realty", 1000, 1000),))
     events.apply_event(s, ev, random.Random(1))
-    assert s.cash == 100_000 - 3000
+    assert s.cash == 200_000 - 3000
 
 
 def test_modifier_expires():

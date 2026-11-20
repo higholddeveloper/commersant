@@ -38,6 +38,7 @@ class EventDef:
     effects: tuple[Effect, ...]
     weight: float = 1.0
     tone: int = 0              # +1 удачное, -1 негативное, 0 нейтральное
+    needs: str = ""            # событие возможно, только если у игрока есть этот актив (символ / класс)
 
 
 @dataclass
@@ -57,15 +58,21 @@ P, CASH, CPCT, HOLD, DR, RENT, RATE, REP = (
     EffectKind.DRIFT, EffectKind.RENT, EffectKind.RATE, EffectKind.REPAIR,
 )
 
+BAD_WEIGHT = 0.5   # негативные события выпадают вдвое реже
+
 EVENTS: tuple[EventDef, ...] = (
     # ---------- Сырьё ----------
     EventDef("oil_opec_cut", "commodity", "ОПЕК урезала добычу — нефть дорожает.", (_e(P, "OIL", 0.08, 0.18),), 1.0, +1),
     EventDef("oil_glut", "commodity", "Перепроизводство нефти: склады переполнены.", (_e(P, "OIL", -0.18, -0.08),), 1.0, -1),
-    EventDef("oil_pipeline", "commodity", "Авария на трубопроводе: часть нефти потеряна.", (_e(HOLD, "OIL", -0.15, -0.05), _e(P, "OIL", 0.03, 0.08)), 0.6, -1),
+    EventDef("oil_pipeline", "commodity", "Авария на трубопроводе: часть нефти потеряна.", (_e(HOLD, "OIL", -0.08, -0.03), _e(P, "OIL", 0.03, 0.08)), 0.6, -1, "OIL"),
     EventDef("oil_war", "commodity", "Конфликт на Ближнем Востоке: нефть растёт несколько ходов.", (_e(DR, "OIL", 0.02, 0.04, 3),), 0.7, +1),
+    EventDef("oil_fire", "commodity", "Пожар на нефтехранилище: часть запасов пришла в негодность.",
+             (_e(HOLD, "OIL", -0.05, -0.05),), 0.12, -1, "OIL"),
     EventDef("land_boom", "commodity", "Рядом построят автобан — земля дорожает.", (_e(P, "LAND", 0.08, 0.20),), 1.0, +1),
     EventDef("land_tax", "commodity", "Новый земельный налог: цены на землю падают.", (_e(P, "LAND", -0.15, -0.06),), 0.8, -1),
-    EventDef("land_squat", "commodity", "Самозахват участков: потеряна часть земли.", (_e(HOLD, "LAND", -0.12, -0.04),), 0.4, -1),
+    EventDef("land_squat", "commodity", "Самозахват участков: потеряна часть земли.", (_e(HOLD, "LAND", -0.06, -0.02),), 0.4, -1, "LAND"),
+    EventDef("land_quake", "commodity", "Катаклизм (оползень, наводнение): часть участков непригодна.",
+             (_e(HOLD, "LAND", -0.10, -0.05),), 0.12, -1, "LAND"),
     # ---------- Акции ----------
     EventDef("stock_beat", "stock", "{name}: отчёт лучше ожиданий.", (_e(P, "@random:stock", 0.06, 0.15),), 1.5, +1),
     EventDef("stock_miss", "stock", "{name}: отчёт провален, акции летят вниз.", (_e(P, "@random:stock", -0.16, -0.06),), 1.5, -1),
@@ -78,16 +85,16 @@ EVENTS: tuple[EventDef, ...] = (
     EventDef("crypto_ban", "crypto", "Регулятор запретил крипту в крупной стране.", (_e(P, "crypto", -0.22, -0.10),), 0.9, -1),
     EventDef("crypto_meme", "crypto", "Мем-ажиотаж: DOGE улетает вверх.", (_e(P, "DOGE", 0.20, 0.50),), 0.6, +1),
     EventDef("crypto_whale", "crypto", "Кит слил {name} — цена обваливается.", (_e(P, "@random:crypto", -0.25, -0.10),), 0.8, -1),
-    EventDef("crypto_wallet", "crypto", "Фишинг: часть вашей крипты украдена.", (_e(HOLD, "crypto", -0.12, -0.04),), 0.5, -1),
+    EventDef("crypto_wallet", "crypto", "Фишинг: часть вашей крипты украдена.", (_e(HOLD, "crypto", -0.06, -0.02),), 0.5, -1, "crypto"),
     # ---------- Недвижимость ----------
     EventDef("realty_rent_boom", "realty", "Бум аренды: арендаторы платят больше.", (_e(RENT, "realty", 0.30, 0.60, 4),), 1.0, +1),
-    EventDef("realty_flood", "realty", "Авария: прорвало трубы, нужен ремонт.", (_e(REP, "realty", 800, 3000),), 1.0, -1),
+    EventDef("realty_flood", "realty", "Авария: прорвало трубы, нужен ремонт.", (_e(REP, "realty", 400, 1500),), 1.0, -1, "realty"),
     EventDef("realty_vacancy", "realty", "Арендаторы съехали — аренда просела.", (_e(RENT, "realty", -0.50, -0.30, 3),), 0.8, -1),
     EventDef("realty_metro", "realty", "Рядом открыли метро — объекты дорожают.", (_e(P, "realty", 0.05, 0.12),), 0.7, +1),
     EventDef("realty_crash", "realty", "Рынок недвижимости остывает.", (_e(P, "realty", -0.10, -0.04),), 0.8, -1),
     # ---------- Банк ----------
     EventDef("bank_bonus", "bank", "Банк-партнёр дарит кэшбэк за активность.", (_e(CASH, "ALL", 300, 1500),), 0.7, +1),
-    EventDef("bank_fee", "bank", "Банк ввёл комиссию за обслуживание.", (_e(CASH, "ALL", -1200, -300),), 0.7, -1),
+    EventDef("bank_fee", "bank", "Банк ввёл комиссию за обслуживание.", (_e(CASH, "ALL", -600, -150),), 0.7, -1),
     EventDef("bank_promo", "bank", "Акция банка: повышенная ставка по вкладам.", (_e(RATE, "ALL", 0.001, 0.002, 3),), 0.6, +1),
     # ---------- Кросс-рыночные ----------
     EventDef("x_rate_hike", "cross", "ЦБ повысил ставку: акции и недвижимость под давлением.",
@@ -97,11 +104,11 @@ EVENTS: tuple[EventDef, ...] = (
     EventDef("x_panic", "cross", "Глобальная паника: все бегут из активов!",
              (_e(P, "stock", -0.14, -0.06), _e(P, "crypto", -0.25, -0.10), _e(P, "commodity", -0.08, -0.03)), 0.8, -1),
     EventDef("x_hack", "cross", "Взлом биржи: крипта падает, часть наличных пропала.",
-             (_e(P, "crypto", -0.20, -0.08), _e(CPCT, "ALL", -0.04, -0.01)), 0.6, -1),
+             (_e(P, "crypto", -0.20, -0.08), _e(CPCT, "ALL", -0.02, -0.005)), 0.6, -1),
     EventDef("x_inflation", "cross", "Инфляция разгоняется: сырьё дорожает.",
              (_e(P, "commodity", 0.04, 0.10), _e(RATE, "ALL", 0.0005, 0.0015, 3)), 0.8, 0),
     EventDef("x_tax_refund", "cross", "Налоговый вычет: вам вернули деньги.", (_e(CASH, "ALL", 1000, 4000),), 0.7, +1),
-    EventDef("x_theft", "cross", "Карманная кража: пропала часть наличных.", (_e(CPCT, "ALL", -0.06, -0.02),), 0.6, -1),
+    EventDef("x_theft", "cross", "Карманная кража: пропала часть наличных.", (_e(CPCT, "ALL", -0.03, -0.01),), 0.6, -1),
     EventDef("x_inheritance", "cross", "Неожиданное наследство от дальнего родственника!", (_e(CASH, "ALL", 3000, 9000),), 0.3, +1),
     EventDef("x_bull", "cross", "Мировой оптимизм: растёт всё, что можно.", (_e(DR, "ALL", 0.005, 0.01, 3),), 0.6, +1),
 )
@@ -109,16 +116,26 @@ EVENTS: tuple[EventDef, ...] = (
 
 # --------------------------- выбор и применение ---------------------------
 
-def pick_event(rng: random.Random, difficulty: config.Difficulty) -> EventDef:
-    weights = [e.weight * (difficulty.bad_event_bias if e.tone < 0 else 1.0) for e in EVENTS]
-    return rng.choices(EVENTS, weights=weights, k=1)[0]
+def _owned(state: GameState | None, need: str) -> bool:
+    if not need or state is None:
+        return True
+    if need in config.ASSET_BY_SYMBOL:
+        return state.holdings.get(need, 0.0) > 0
+    return any(state.holdings.get(a.symbol, 0.0) > 0 for a in config.assets_of(AssetClass(need)))
+
+
+def pick_event(rng: random.Random, difficulty: config.Difficulty, state: GameState | None = None) -> EventDef:
+    pool = [e for e in EVENTS if _owned(state, e.needs)]
+    weights = [e.weight * (difficulty.bad_event_bias * BAD_WEIGHT if e.tone < 0 else 1.0) for e in pool]
+    return rng.choices(pool, weights=weights, k=1)[0]
 
 
 def roll_event(state: GameState, rng: random.Random, difficulty: config.Difficulty) -> EventResult | None:
     """С вероятностью event_chance выбирает и применяет событие."""
-    if rng.random() > difficulty.event_chance:
+    chance = difficulty.event_chance * (config.CALM_EVENTS if state.calm else 1.0)
+    if rng.random() > chance:
         return None
-    return apply_event(state, pick_event(rng, difficulty), rng)
+    return apply_event(state, pick_event(rng, difficulty, state), rng)
 
 
 def _targets(target: str, rng: random.Random, picked: dict[str, Asset]) -> list[Asset]:

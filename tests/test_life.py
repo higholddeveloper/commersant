@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from core import property as prop
+from core import property as prop, windfalls
 from core import storage, timeline
 from core.engine import Game, TradeError
 from core.models import GameStatus
@@ -150,6 +150,7 @@ def _homeless_game(cash=100_000) -> Game:
 def test_no_illness_during_grace_period(monkeypatch):
     game = _homeless_game()
     monkeypatch.setattr(prop, "roll_mishap", lambda *a, **k: None)
+    monkeypatch.setattr(windfalls, "roll", lambda *a, **k: [])
     for _ in range(prop.HOMELESS_GRACE - 1):
         game.next_turn()
         assert game.state.illnesses == 0 and game.state.status is GameStatus.PLAYING
@@ -158,6 +159,7 @@ def test_no_illness_during_grace_period(monkeypatch):
 def test_homeless_gets_sick_pays_then_dies(monkeypatch):
     game = _homeless_game()
     monkeypatch.setattr(prop, "roll_mishap", lambda *a, **k: None)
+    monkeypatch.setattr(windfalls, "roll", lambda *a, **k: [])
     monkeypatch.setattr(random.Random, "random", lambda self: 0.0)   # болезнь каждый ход
     bills = 0
     for _ in range(12):
@@ -177,6 +179,7 @@ def test_homeless_gets_sick_pays_then_dies(monkeypatch):
 def test_homeless_without_money_dies_at_first_illness(monkeypatch):
     game = _homeless_game(cash=0)
     monkeypatch.setattr(prop, "roll_mishap", lambda *a, **k: None)
+    monkeypatch.setattr(windfalls, "roll", lambda *a, **k: [])
     monkeypatch.setattr(random.Random, "random", lambda self: 0.0)
     while game.state.status is GameStatus.PLAYING and game.state.day < 20:
         game.next_turn()
@@ -186,6 +189,7 @@ def test_homeless_without_money_dies_at_first_illness(monkeypatch):
 def test_buying_a_roof_stops_the_disease(monkeypatch):
     game = _homeless_game()
     monkeypatch.setattr(prop, "roll_mishap", lambda *a, **k: None)
+    monkeypatch.setattr(windfalls, "roll", lambda *a, **k: [])
     monkeypatch.setattr(random.Random, "random", lambda self: 0.0)
     for _ in range(prop.HOMELESS_GRACE):
         game.next_turn()
@@ -199,6 +203,7 @@ def test_buying_a_roof_stops_the_disease(monkeypatch):
 # ---------------------------- банк описывает имущество ----------------------------
 def test_default_seizes_property_immediately(g, monkeypatch):
     monkeypatch.setattr(prop, "roll_mishap", lambda *a, **k: None)
+    monkeypatch.setattr(windfalls, "roll", lambda *a, **k: [])
     g.state.housing, g.state.vehicle = 3, 3
     g.state.bank.loan, g.state.bank.loan_turns_left = 300_000, 1
     g.state.cash = 0
@@ -211,6 +216,7 @@ def test_default_seizes_property_immediately(g, monkeypatch):
 
 def test_default_stops_seizing_when_debt_covered(g, monkeypatch):
     monkeypatch.setattr(prop, "roll_mishap", lambda *a, **k: None)
+    monkeypatch.setattr(windfalls, "roll", lambda *a, **k: [])
     g.state.housing, g.state.vehicle = 4, 4
     g.state.bank.loan, g.state.bank.loan_turns_left = 40_000, 1
     g.state.cash = 0
@@ -220,6 +226,7 @@ def test_default_stops_seizing_when_debt_covered(g, monkeypatch):
 
 def test_small_overdraft_gets_one_grace_turn(g, monkeypatch):
     monkeypatch.setattr(prop, "roll_mishap", lambda *a, **k: None)
+    monkeypatch.setattr(windfalls, "roll", lambda *a, **k: [])
     g.state.cash = -100
     g.state.housing, g.state.vehicle = 3, 3
     g.next_turn()
@@ -231,6 +238,7 @@ def test_small_overdraft_gets_one_grace_turn(g, monkeypatch):
 
 def test_seizure_price_is_fire_sale(g, monkeypatch):
     monkeypatch.setattr(prop, "roll_mishap", lambda *a, **k: None)
+    monkeypatch.setattr(windfalls, "roll", lambda *a, **k: [])
     g.state.vehicle = 3
     g.state.cash = -1
     g.state.bank.loan, g.state.bank.loan_turns_left = 0, 0

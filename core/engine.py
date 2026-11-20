@@ -6,7 +6,7 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from . import config, events, market, patterns, timeline
+from . import config, events, market, patterns, timeline, windfalls
 from . import property as prop
 from .models import AssetClass, GameState, GameStatus, ModKind
 
@@ -71,6 +71,7 @@ class Game:
             self._append_log(state, f"{state.player}, добро пожаловать на биржу! "
                                     f"Цель: {_money(diff.target)} $ за {diff.max_days} ходов.", 0)
         self.state = state
+        self.last_tax = 0.0        # налог с последней продажи недвижимости
         self.diff = config.DIFFICULTIES[state.difficulty]
         self.rng = random.Random(state.seed + state.day * 7919)
 
@@ -184,10 +185,16 @@ class Game:
         if q > self.qty(symbol) + 1e-9:
             raise TradeError("Недостаточно актива на руках")
         proceeds = round(q * self.bid(symbol), 2)
-        self.state.cash = round(self.state.cash + proceeds, 2)
         before = self.qty(symbol)
-        self.state.holdings[symbol] = round(before - q, 6)
         basis = self.state.cost_basis.get(symbol, 0.0)
+        self.last_tax = 0.0
+        if config.ASSET_BY_SYMBOL[symbol].cls is AssetClass.REALTY:   # налог с прибыли от продажи недвижимости
+            profit = proceeds - basis * q / before
+            if profit > 0:
+                self.last_tax = round(profit * config.REALTY_SALE_TAX, 2)
+                proceeds = round(proceeds - self.last_tax, 2)
+        self.state.cash = round(self.state.cash + proceeds, 2)
+        self.state.holdings[symbol] = round(before - q, 6)
         self.state.cost_basis[symbol] = 0.0 if self.qty(symbol) <= 0 else round(basis * (1 - q / before), 2)
         return proceeds
 
@@ -344,9 +351,9 @@ class Game:
         elif n < prop.HOMELESS_GRACE:
             if n == prop.HOMELESS_GRACE - 2:
                 self._event(rep, "homeless_cold", "Ночи холодные, вы кашляете. Крышу над головой — как можно скорее!", -1, "life")
-        elif self.rng.random() < 0.45:
+        elif self.rng.random() < prop.ILLNESS_CHANCE:
             s.illnesses += 1
-            bill = round(self.rng.uniform(2_000, 6_000), -1)
+            bill = round(self.rng.uniform(1_000, 3_000), -1)
             if s.illnesses >= prop.MAX_ILLNESSES:
                 self._die(rep, "Третья болезнь на улице — организм не выдержал. Вы умерли.")
             elif self._pay(bill):
@@ -415,22 +422,35 @@ class Game:
             self._utilities(rep)
 
         # 3) цены, чёрные лебеди, затем события; модификаторы «стареют» после пересчёта цен
+        if s.calm_left > 0:                 # тишина на рынке: тренд слабый, событий мало
+            s.calm_left -= 1
+            s.calm = True
+        elif self.rng.random() < config.CALM_CHANCE:
+            s.calm_left = self.rng.randint(*config.CALM_TURNS) - 1
+            s.calm = True
+        else:
+            s.calm = False
         market.step_prices(s, self.rng)
         events.tick_modifiers(s)
-        swan = patterns.roll_swan(s, self.rng)
+        swan = None if s.calm else patterns.roll_swan(s, self.rng)
         if swan:
             self._event(rep, "swan_" + swan.id, f"ЧЁРНЫЙ ЛЕБЕДЬ · {swan.title}: {swan.text}", -1, "swan")
         rep.event = events.roll_event(s, self.rng, self.diff)
         if rep.event:
             self._say(rep, rep.event.text, rep.event.tone)
 
-        # 4) жильё и транспорт, болезни; долги и арест имущества
+        # 4) жильё и транспорт, болезни; приятные неожиданности; долги и арест имущества
         self._life(rep)
+        if s.status is GameStatus.PLAYING:
+            for ev in windfalls.roll(s, self.rng, self.net_worth()):
+                rep.extra.append(ev)
+                self._say(rep, ev.text, ev.tone)
         if s.status is GameStatus.PLAYING:
             self._enforce(rep, immediate=defaulted)
 
         shown = rep.all_events
-        s.current_event = "  ▪  ".join(e.text for e in shown) if shown else "Тихий день на рынке."
+        s.current_event = ("  ▪  ".join(e.text for e in shown) if shown else
+                           "Рынок затих: цены почти не двигаются." if s.calm else "Тихий день на рынке.")
         s.current_tone = min(e.tone for e in shown) if any(e.tone for e in shown) else 0
         if not shown:
             self._say(rep, s.current_event)
